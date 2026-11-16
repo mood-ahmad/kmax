@@ -1,4 +1,4 @@
-name: Test Recovered Signaling
+name: Test Recovered Signaling & Build Baseline
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  test-and-baseline:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v4
 
       - name: Set up Go 1.22
         uses: actions/setup-go@v5
@@ -37,8 +37,6 @@ jobs:
       - name: Run tests
         run: go test ./... -v
 
-      # Build a normal Linux binary first.
-      # This preserves the successful build test we already verified.
       - name: Build Linux test signaling
         run: go build -v -o webrtc-signaling-test .
 
@@ -55,15 +53,11 @@ jobs:
           path: recovered_source/webrtc-signaling/webrtc-signaling-test
           if-no-files-found: error
 
-      # Check that this Go toolchain explicitly supports android/arm64
-      # before attempting the cross-build.
       - name: Check Android ARM64 target
         run: |
           echo "Checking Go target support..."
           go tool dist list | grep -Fx "android/arm64"
 
-      # Produce the binary we will inspect for CurBox.
-      # CGO is disabled because the recovered signaling is pure Go.
       - name: Build Android ARM64 signaling
         env:
           CGO_ENABLED: '0'
@@ -78,14 +72,11 @@ jobs:
       - name: Verify Android ARM64 binary
         run: |
           test -s webrtc-signaling-android-arm64
-
           echo "===== File info ====="
           file webrtc-signaling-android-arm64
-
           echo ""
           echo "===== Size ====="
           ls -lh webrtc-signaling-android-arm64
-
           echo ""
           echo "===== SHA-256 ====="
           sha256sum webrtc-signaling-android-arm64
@@ -97,3 +88,51 @@ jobs:
           path: recovered_source/webrtc-signaling/webrtc-signaling-android-arm64
           if-no-files-found: error
 
+      # ==========================================
+      # Baseline Packaging Steps
+      # ==========================================
+      - name: Download Stable Binaries Package
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.BINARIES_TOKEN }}
+        run: |
+          echo "Downloading original cloudphone-binaries-v041.zip from private repo..."
+          gh release download binaries-v041 -R mood-ahmad/curbox-scrcpy-binaries -p "cloudphone-binaries-v041.zip" -O cloudphone-binaries-v041.zip
+
+      - name: Extract, Replace, and Repackage
+        working-directory: ${{ github.workspace }}
+        run: |
+          echo "=== Extracting original package ==="
+          mkdir -p extracted-binaries
+          unzip -q cloudphone-binaries-v041.zip -d extracted-binaries
+
+          echo "=== Searching for existing signaling binary ==="
+          OLD_BIN=$(find extracted-binaries -type f -name "webrtc-signaling*" ! -name "*test*" | head -n 1)
+
+          if [ -z "$OLD_BIN" ]; then
+            echo "❌ Could not find old signaling binary in the package!"
+            echo "=== Files inside the zip ==="
+            find extracted-binaries -type f | head -n 50
+            exit 1
+          fi
+
+          echo "✅ Found old binary at: $OLD_BIN"
+
+          echo "=== Replacing binary ==="
+          cp recovered_source/webrtc-signaling/webrtc-signaling-android-arm64 "$OLD_BIN"
+          chmod +x "$OLD_BIN"
+
+          echo "=== Repacking ==="
+          cd extracted-binaries
+          zip -r -q ../cloudphone-binaries-v041-recovered-baseline.zip .
+          cd ..
+
+          echo "=== New package created ==="
+          ls -lh cloudphone-binaries-v041-recovered-baseline.zip
+
+      - name: Upload Recovered Baseline Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudphone-binaries-v041-recovered-baseline
+          path: cloudphone-binaries-v041-recovered-baseline.zip
+          if-no-files-found: error
