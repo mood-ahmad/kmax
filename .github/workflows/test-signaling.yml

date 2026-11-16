@@ -1,0 +1,54 @@
+name: Test Recovered Signaling
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    defaults:
+      run:
+        working-directory: recovered_source/webrtc-signaling
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache-dependency-path: recovered_source/webrtc-signaling/go.sum
+
+      - name: Show Go version
+        run: go version
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Run tests
+        run: go test ./... -v
+
+      - name: Build signaling
+        run: go build -v -o webrtc-signaling-test .
+
+      - name: Verify binary
+        run: |
+          test -s webrtc-signaling-test
+          file webrtc-signaling-test
+          ls -lh webrtc-signaling-test
+
+      - name: Upload test binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovered-webrtc-signaling-test
+          path: recovered_source/webrtc-signaling/webrtc-signaling-test
+          if-no-files-found: error
