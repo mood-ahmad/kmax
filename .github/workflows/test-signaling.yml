@@ -37,19 +37,63 @@ jobs:
       - name: Run tests
         run: go test ./... -v
 
-      - name: Build signaling
+      # Build a normal Linux binary first.
+      # This preserves the successful build test we already verified.
+      - name: Build Linux test signaling
         run: go build -v -o webrtc-signaling-test .
 
-      - name: Verify binary
+      - name: Verify Linux test binary
         run: |
           test -s webrtc-signaling-test
           file webrtc-signaling-test
           ls -lh webrtc-signaling-test
 
-      - name: Upload test binary
+      - name: Upload Linux test binary
         uses: actions/upload-artifact@v4
         with:
           name: recovered-webrtc-signaling-test
           path: recovered_source/webrtc-signaling/webrtc-signaling-test
+          if-no-files-found: error
+
+      # Check that this Go toolchain explicitly supports android/arm64
+      # before attempting the cross-build.
+      - name: Check Android ARM64 target
+        run: |
+          echo "Checking Go target support..."
+          go tool dist list | grep -Fx "android/arm64"
+
+      # Produce the binary we will inspect for CurBox.
+      # CGO is disabled because the recovered signaling is pure Go.
+      - name: Build Android ARM64 signaling
+        env:
+          CGO_ENABLED: '0'
+          GOOS: android
+          GOARCH: arm64
+        run: |
+          go build -v \
+            -trimpath \
+            -o webrtc-signaling-android-arm64 \
+            .
+
+      - name: Verify Android ARM64 binary
+        run: |
+          test -s webrtc-signaling-android-arm64
+
+          echo "===== File info ====="
+          file webrtc-signaling-android-arm64
+
+          echo ""
+          echo "===== Size ====="
+          ls -lh webrtc-signaling-android-arm64
+
+          echo ""
+          echo "===== SHA-256 ====="
+          sha256sum webrtc-signaling-android-arm64
+
+      - name: Upload Android ARM64 signaling
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovered-webrtc-signaling-android-arm64
+          path: recovered_source/webrtc-signaling/webrtc-signaling-android-arm64
           if-no-files-found: error
 
