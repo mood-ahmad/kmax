@@ -1,12 +1,15 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -44,21 +47,38 @@ func main() {
 	log.Printf("   ScrcpyOverWebRTC Signaling Server v0.3.6 (Recovered)")
 	log.Printf("====================================================")
 
-	store := NewPersistenceStore(*dataFlag)
-
-	hub := NewHub(store)
-	if *iceServersFlag != "" {
-		urls := strings.Split(*iceServersFlag, ",")
-		hub.iceServers = []IceServerConfig{{URLs: urls}}
-	} else if *stunServerFlag != "" {
-		hub.iceServers = []IceServerConfig{{URLs: []string{*stunServerFlag}}}
+	// إدارة السر أوتوماتيك (حل دائم)
+	agentSecret := os.Getenv("AGENT_SECRET")
+	if agentSecret == "" {
+		secretFilePath := filepath.Join(*dataFlag, "agent.secret")
+		// نحاول نقرا السر من الملف لو موجود
+		if fileBytes, err := os.ReadFile(secretFilePath); err == nil {
+			agentSecret = strings.TrimSpace(string(fileBytes))
+		}
+		
+		// لو مفيش سر في الملف، نولد واحد عشوائي آمن ونحفظه
+		if agentSecret == "" {
+			b := make([]byte, 32)
+			if _, err := rand.Read(b); err != nil {
+				log.Fatalf("[Security] FATAL: Failed to generate cryptographically secure secret: %v", err)
+			}
+			agentSecret = hex.EncodeToString(b)
+			
+			// نضمن إن فولدر البيانات موجود
+			if err := os.MkdirAll(*dataFlag, 0755); err != nil {
+				log.Fatalf("[Security] FATAL: Failed to create data directory: %v", err)
+			}
+			
+			// نحفظ السر عشان المرة الجاية
+			if err := os.WriteFile(secretFilePath, []byte(agentSecret), 0600); err != nil {
+				log.Fatalf("[Security] FATAL: Failed to write agent secret file: %v", err)
+			}
+			log.Printf("[Security] Generated new secure AGENT_SECRET and saved to %s", secretFilePath)
+		}
+		// نخلي السر متاح في الـ Environment للـ Hub والـ API
+		os.Setenv("AGENT_SECRET", agentSecret)
 	}
 
-	auth := NewAuthManager(*noAuthFlag, store)
-	apiServer := NewAPIServer(hub, auth, store, *assetsFlag, *downloadsFlag)
-
-	// Validate AGENT_SECRET fail-fast in production mode
-	agentSecret := os.Getenv("AGENT_SECRET")
 	isDev := os.Getenv("DEV_MODE") == "true" || os.Getenv("DEBUG") == "true" || *debugFlag || *noAuthFlag || flag.Lookup("test.v") != nil
 	insecureDefaults := map[string]bool{
 		"cloudphone_production_agent_secret_2026": true,
@@ -78,6 +98,19 @@ func main() {
 			log.Fatalf("[Security] FATAL: Production mode detected insecure placeholder AGENT_SECRET '%s'! Please set a unique, cryptographically secure secret.", agentSecret)
 		}
 	}
+
+	store := NewPersistenceStore(*dataFlag)
+
+	hub := NewHub(store)
+	if *iceServersFlag != "" {
+		urls := strings.Split(*iceServersFlag, ",")
+		hub.iceServers = []IceServerConfig{{URLs: urls}}
+	} else if *stunServerFlag != "" {
+		hub.iceServers = []IceServerConfig{{URLs: []string{*stunServerFlag}}}
+	}
+
+	auth := NewAuthManager(*noAuthFlag, store)
+	apiServer := NewAPIServer(hub, auth, store, *assetsFlag, *downloadsFlag)
 
 	mux := http.NewServeMux()
 	apiServer.RegisterRoutes(mux)
