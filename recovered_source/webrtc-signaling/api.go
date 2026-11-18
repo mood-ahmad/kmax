@@ -554,6 +554,29 @@ func canAccessDevice(user *User, share *ShareRecord, noAuth bool, targetDeviceID
 	return false
 }
 
+// extractAgentCredential returns the credential presented by an Agent.
+// Authentication precedence:
+//  1. Authorization: Bearer <secret>
+//  2. ?token=<secret> when Authorization is absent
+//  3. ?secret=<secret> when Authorization is absent
+// If Authorization is present but malformed, query fallback is deliberately disabled.
+func extractAgentCredential(r *http.Request) string {
+	authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+	if authHeader != "" {
+		const bearerPrefix = "Bearer "
+		if !strings.HasPrefix(authHeader, bearerPrefix) {
+			return ""
+		}
+		return strings.TrimSpace(strings.TrimPrefix(authHeader, bearerPrefix))
+	}
+
+	token := r.URL.Query().Get("token")
+	if token != "" {
+		return token
+	}
+	return r.URL.Query().Get("secret")
+}
+
 // handleRegisterAgent handles incoming WebSocket connections from cloudphone-agent on Android
 func (s *APIServer) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -588,24 +611,7 @@ func (s *APIServer) handleRegisterAgent(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if agentSecret != "" {
-			// CloudPhone Agent v0.4.1 sends the device secret as:
-			// Authorization: Bearer <secret>.
-			// Keep legacy query credentials for older agents, but never
-			// let a malformed/incorrect Authorization header fall back to
-			// a query credential.
-			authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
-			token := ""
-
-			if strings.HasPrefix(authHeader, "Bearer ") {
-				token = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
-			}
-
-			if authHeader == "" {
-				token = r.URL.Query().Get("token")
-				if token == "" {
-					token = r.URL.Query().Get("secret")
-				}
-			}
+			token := extractAgentCredential(r)
 
 			if token != agentSecret {
 				log.Printf("[Agent] Unauthorized registration attempt for device: %s", deviceID)
