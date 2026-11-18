@@ -194,6 +194,96 @@ jobs:
           file webrtc-signaling-test
           ls -lh webrtc-signaling-test
 
+      - name: Run Real v0.4.1 Agent Against Recovered Signaling (Fail-Closed)
+        env:
+          AGENT_SECRET: ci_v041_runtime_secret_48921849128491028491
+          DEV_MODE: "false"
+          DEBUG: "false"
+        run: |
+          set -euo pipefail
+          AGENT_BIN=$(cat /tmp/v041-agent-bin-path.txt)
+          test -x "$AGENT_BIN"
+
+          rm -rf /tmp/v041-runtime-test
+          mkdir -p /tmp/v041-runtime-test/certs /tmp/v041-runtime-test/data /tmp/v041-runtime-test/assets /tmp/v041-runtime-test/downloads
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj '/CN=127.0.0.1' \
+            -keyout /tmp/v041-runtime-test/certs/server.key \
+            -out /tmp/v041-runtime-test/certs/server.crt >/dev/null 2>&1
+
+          cleanup_runtime() {
+            if [ -n "${AGENT_PID:-}" ]; then kill "$AGENT_PID" 2>/dev/null || true; fi
+            if [ -n "${SIGNALING_PID:-}" ]; then kill "$SIGNALING_PID" 2>/dev/null || true; fi
+          }
+          trap cleanup_runtime EXIT
+
+          ./webrtc-signaling-test \
+            -host 127.0.0.1 \
+            -port 9443 \
+            -assets /tmp/v041-runtime-test/assets \
+            -downloads /tmp/v041-runtime-test/downloads \
+            -cert /tmp/v041-runtime-test/certs/server.crt \
+            -key /tmp/v041-runtime-test/certs/server.key \
+            -data /tmp/v041-runtime-test/data \
+            > /tmp/v041-signaling-runtime.log 2>&1 &
+          SIGNALING_PID=$!
+
+          ready=0
+          for i in $(seq 1 30); do
+            if grep -q 'Listening on' /tmp/v041-signaling-runtime.log; then ready=1; break; fi
+            if ! kill -0 "$SIGNALING_PID" 2>/dev/null; then break; fi
+            sleep 0.2
+          done
+          if [ "$ready" -ne 1 ]; then
+            echo 'ERROR: recovered signaling did not become ready'
+            cat /tmp/v041-signaling-runtime.log
+            exit 1
+          fi
+
+          set +e
+          "$AGENT_BIN" \
+            -signaling 127.0.0.1:9443 \
+            -device-secret "$AGENT_SECRET" \
+            -expires-at '' \
+            > /tmp/v041-agent-runtime.log 2>&1 &
+          AGENT_PID=$!
+          set -e
+
+          registered=0
+          for i in $(seq 1 75); do
+            if grep -q '\[Hub\] Agent registered:' /tmp/v041-signaling-runtime.log; then registered=1; break; fi
+            if grep -q 'Unauthorized agent secret' /tmp/v041-signaling-runtime.log /tmp/v041-agent-runtime.log 2>/dev/null; then break; fi
+            if ! kill -0 "$AGENT_PID" 2>/dev/null; then break; fi
+            sleep 0.2
+          done
+
+          echo '=== Recovered signaling runtime log ==='
+          cat /tmp/v041-signaling-runtime.log
+          echo '=== Original v0.4.1 Agent runtime log ==='
+          cat /tmp/v041-agent-runtime.log
+
+          ! grep -q 'Unauthorized agent secret' /tmp/v041-signaling-runtime.log /tmp/v041-agent-runtime.log
+          if [ "$registered" -ne 1 ]; then
+            echo 'ERROR: original v0.4.1 Agent did not register with recovered signaling'
+            exit 1
+          fi
+          echo 'REAL_V041_AGENT_REGISTRATION=PASS'
+
+      - name: Publish Real v0.4.1 Runtime Compatibility Summary
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          {
+            echo '## Real v0.4.1 Agent vs Recovered Signaling'
+            echo
+            if [ -f /tmp/v041-signaling-runtime.log ] && grep -q '\[Hub\] Agent registered:' /tmp/v041-signaling-runtime.log && \
+               ! grep -q 'Unauthorized agent secret' /tmp/v041-signaling-runtime.log /tmp/v041-agent-runtime.log 2>/dev/null; then
+              echo '**Result: PASS**'
+            else
+              echo '**Result: FAIL / NOT RUN**'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # ==========================================
       # NEW: Real Server Verification Step
       # ==========================================
