@@ -424,6 +424,73 @@ jobs:
           echo "=== New package created ==="
           ls -lh cloudphone-binaries-v041-recovered-baseline.zip
 
+      - name: Verify Recovered Baseline Package Binaries (Fail-Closed)
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          PACKAGE=cloudphone-binaries-v041-recovered-baseline.zip
+          test -s "$PACKAGE"
+          rm -rf /tmp/recovered-baseline-verify
+          mkdir -p /tmp/recovered-baseline-verify
+          unzip -q "$PACKAGE" -d /tmp/recovered-baseline-verify
+
+          EXPECTED_SIGNALING_SHA=$(sha256sum recovered_source/webrtc-signaling/webrtc-signaling-android-arm64 | awk '{print $1}')
+          EXPECTED_AGENT_SHA='8a155ae50b06c9f27542461390d08704caa102e01b50ee451cd2d7847092244e'
+
+          SIGNALING_MATCHES=0
+          while IFS= read -r f; do
+            desc=$(file -b "$f")
+            sha=$(sha256sum "$f" | awk '{print $1}')
+            printf 'SIGNALING path=%s sha256=%s type=%s\n' "$f" "$sha" "$desc"
+            if [ "$sha" = "$EXPECTED_SIGNALING_SHA" ]; then
+              case "$desc" in
+                *ELF*64-bit*ARM*aarch64*) SIGNALING_MATCHES=$((SIGNALING_MATCHES + 1)) ;;
+              esac
+            fi
+          done < <(find /tmp/recovered-baseline-verify -type f -name 'webrtc-signaling*' ! -name '*test*' -print | sort)
+          [ "$SIGNALING_MATCHES" -ge 1 ] || { echo 'ERROR: packaged ARM64 signaling does not match the tested Android ARM64 binary'; exit 1; }
+
+          AGENT_MATCHES=0
+          while IFS= read -r f; do
+            desc=$(file -b "$f")
+            sha=$(sha256sum "$f" | awk '{print $1}')
+            printf 'AGENT path=%s sha256=%s type=%s\n' "$f" "$sha" "$desc"
+            case "$desc" in
+              *ELF*64-bit*ARM*aarch64*)
+                if [ "$sha" = "$EXPECTED_AGENT_SHA" ]; then AGENT_MATCHES=$((AGENT_MATCHES + 1)); fi
+                ;;
+            esac
+          done < <(find /tmp/recovered-baseline-verify -type f -name 'cloudphone-agent*' -print | sort)
+          [ "$AGENT_MATCHES" -ge 1 ] || { echo 'ERROR: original v0.4.1 ARM64 Agent SHA-256 not preserved in packaged baseline'; exit 1; }
+
+          PACKAGE_SHA=$(sha256sum "$PACKAGE" | awk '{print $1}')
+          {
+            echo "PACKAGE_SHA256=$PACKAGE_SHA"
+            echo "EXPECTED_SIGNALING_SHA256=$EXPECTED_SIGNALING_SHA"
+            echo "EXPECTED_AGENT_SHA256=$EXPECTED_AGENT_SHA"
+            echo "SIGNALING_MATCHES=$SIGNALING_MATCHES"
+            echo "AGENT_MATCHES=$AGENT_MATCHES"
+            echo 'BASELINE_BINARY_VERIFICATION=PASS'
+          } | tee /tmp/baseline-binary-verification.txt
+
+      - name: Publish Baseline Binary Verification Summary
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          {
+            echo '## Baseline Binary Verification'
+            echo
+            if [ -f /tmp/baseline-binary-verification.txt ] && grep -q 'BASELINE_BINARY_VERIFICATION=PASS' /tmp/baseline-binary-verification.txt; then
+              echo '**Result: PASS**'
+              echo
+              echo '```text'
+              cat /tmp/baseline-binary-verification.txt
+              echo '```'
+            else
+              echo '**Result: FAIL / NOT RUN**'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Recovered Baseline Package
         uses: actions/upload-artifact@v4
         with:
