@@ -113,6 +113,78 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      - name: Download Stable Binaries Package
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ secrets.BINARIES_TOKEN }}
+        run: |
+          echo "Downloading original cloudphone-binaries-v041.zip from private repo..."
+          gh release download binaries-v041 -R mood-ahmad/curbox-scrcpy-binaries -p "cloudphone-binaries-v041.zip" -O cloudphone-binaries-v041.zip
+
+      - name: Inspect v0.4.1 Agent Binaries (Fail-Closed)
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          rm -rf /tmp/cloudphone-v041-inspect
+          mkdir -p /tmp/cloudphone-v041-inspect
+          unzip -q cloudphone-binaries-v041.zip -d /tmp/cloudphone-v041-inspect
+
+          find /tmp/cloudphone-v041-inspect -type f -name 'cloudphone-agent*' -print | sort | tee /tmp/v041-agent-paths.txt
+          test -s /tmp/v041-agent-paths.txt || { echo 'ERROR: no cloudphone-agent binaries found'; exit 1; }
+
+          : > /tmp/v041-agent-inventory.txt
+          while IFS= read -r f; do
+            printf 'PATH=%s\n' "$f" >> /tmp/v041-agent-inventory.txt
+            file "$f" >> /tmp/v041-agent-inventory.txt
+            sha256sum "$f" >> /tmp/v041-agent-inventory.txt
+            echo >> /tmp/v041-agent-inventory.txt
+          done < /tmp/v041-agent-paths.txt
+          cat /tmp/v041-agent-inventory.txt
+
+          AGENT_BIN=''
+          while IFS= read -r f; do
+            desc=$(file -b "$f")
+            case "$desc" in
+              *ELF*64-bit*x86-64*) AGENT_BIN="$f"; break ;;
+            esac
+          done < /tmp/v041-agent-paths.txt
+
+          test -n "$AGENT_BIN" || { echo 'ERROR: no Linux ELF x86-64 cloudphone-agent found'; exit 1; }
+          chmod +x "$AGENT_BIN"
+          printf '%s\n' "$AGENT_BIN" > /tmp/v041-agent-bin-path.txt
+
+          set +e
+          "$AGENT_BIN" -help > /tmp/v041-agent-help.txt 2>&1
+          HELP_RC=$?
+          set -e
+          cat /tmp/v041-agent-help.txt
+          grep -q -- '-device-secret' /tmp/v041-agent-help.txt || { echo 'ERROR: v0.4.1 Agent does not expose -device-secret'; exit 1; }
+          grep -q -- 'CloudPhone Fat Agent v0.4.1' /tmp/v041-agent-help.txt || echo "NOTE: version banner not present in -help output (rc=$HELP_RC); runtime gate will verify behaviour instead"
+          echo 'V041_AGENT_CONTRACT=PASS'
+
+      - name: Publish v0.4.1 Agent Inventory Summary
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          {
+            echo '## CloudPhone Agent v0.4.1 Binary Inventory'
+            echo
+            if [ -f /tmp/v041-agent-inventory.txt ]; then
+              echo '```text'
+              cat /tmp/v041-agent-inventory.txt
+              echo '```'
+            else
+              echo '**Result: inventory unavailable**'
+            fi
+            if [ -f /tmp/v041-agent-bin-path.txt ]; then
+              echo
+              echo '**Linux x86-64 candidate: FOUND**'
+            else
+              echo
+              echo '**Linux x86-64 candidate: NOT FOUND**'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build Linux test signaling
         run: go build -v -o webrtc-signaling-test .
 
@@ -229,13 +301,6 @@ jobs:
       # ==========================================
       # Baseline Packaging Steps
       # ==========================================
-      - name: Download Stable Binaries Package
-        working-directory: ${{ github.workspace }}
-        env:
-          GH_TOKEN: ${{ secrets.BINARIES_TOKEN }}
-        run: |
-          echo "Downloading original cloudphone-binaries-v041.zip from private repo..."
-          gh release download binaries-v041 -R mood-ahmad/curbox-scrcpy-binaries -p "cloudphone-binaries-v041.zip" -O cloudphone-binaries-v041.zip
 
       - name: Extract, Replace, and Repackage
         working-directory: ${{ github.workspace }}
