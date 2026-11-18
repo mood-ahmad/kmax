@@ -1,6 +1,7 @@
 name: Build & Release Pipeline
 
 on:
+  workflow_dispatch:
   push:
     branches: [ master, main ]
     tags: [ 'v*' ]
@@ -47,13 +48,30 @@ jobs:
           GOOS=linux GOARCH=arm64 go build -o webrtc-signaling-linux-arm64 .
           GOOS=windows GOARCH=amd64 go build -o webrtc-signaling-windows-amd64.exe .
 
-      - name: Build CloudPhone Agent Multi-Arch
+      - name: Download Verified Original CloudPhone v0.4.1 Agent Package
+        env:
+          GH_TOKEN: ${{ secrets.BINARIES_TOKEN }}
         run: |
-          cd recovered_source/cloudphone-agent
-          GOOS=linux GOARCH=amd64 go build -o cloudphone-agent-amd64 .
-          GOOS=linux GOARCH=arm64 go build -o cloudphone-agent-arm64 .
-          GOOS=linux GOARCH=arm GOARM=7 go build -o cloudphone-agent-armeabi-v7a .
-          GOOS=windows GOARCH=amd64 go build -o cloudphone-agent-windows-amd64.exe .
+          set -euo pipefail
+          gh release download binaries-v041 -R mood-ahmad/curbox-scrcpy-binaries \
+            -p "cloudphone-binaries-v041.zip" -O /tmp/cloudphone-binaries-v041.zip
+          rm -rf /tmp/cloudphone-v041
+          mkdir -p /tmp/cloudphone-v041
+          unzip -q /tmp/cloudphone-binaries-v041.zip -d /tmp/cloudphone-v041
+
+          A64=$(find /tmp/cloudphone-v041 -type f -path '*/agentd/cloudphone-agent-arm64' -print -quit)
+          A32=$(find /tmp/cloudphone-v041 -type f -path '*/agentd/cloudphone-agent-armeabi-v7a' -print -quit)
+          AMD=$(find /tmp/cloudphone-v041 -type f -path '*/agentd/cloudphone-agent-amd64' -print -quit)
+          test -n "$A64" && test -n "$A32" && test -n "$AMD"
+
+          mkdir -p recovered_source/cloudphone-agent
+          cp "$A64" recovered_source/cloudphone-agent/cloudphone-agent-arm64
+          cp "$A32" recovered_source/cloudphone-agent/cloudphone-agent-armeabi-v7a
+          cp "$AMD" recovered_source/cloudphone-agent/cloudphone-agent-amd64
+
+          echo '8a155ae50b06c9f27542461390d08704caa102e01b50ee451cd2d7847092244e  recovered_source/cloudphone-agent/cloudphone-agent-arm64' | sha256sum -c -
+          echo 'dde525e0dab00043da4187664a7b8c847b8cb6095d21c84774b9c3b2dc1e1b95  recovered_source/cloudphone-agent/cloudphone-agent-armeabi-v7a' | sha256sum -c -
+          echo 'c7ee6405c2f8a39fac07985e26e5b3fbfea89808c2a0bd19c2f9a6fae877585a  recovered_source/cloudphone-agent/cloudphone-agent-amd64' | sha256sum -c -
 
       - name: Upload Binaries Artifact
         uses: actions/upload-artifact@v4
@@ -155,6 +173,27 @@ jobs:
           ./gradlew clean assembleDebug assembleRelease
           cp app/build/outputs/apk/release/app-release-unsigned.apk app/build/outputs/apk/release/cloudphone-v1.0.0.apk
           cp app/build/outputs/apk/debug/app-debug.apk app/build/outputs/apk/debug/cloudphone-v1.0.0-debug.apk
+
+      - name: Verify APK Bundles Tested ARM64 Agent and Current Signaling (Fail-Closed)
+        run: |
+          set -euo pipefail
+          APK=recovered_source/android-app/app/build/outputs/apk/debug/app-debug.apk
+          test -s "$APK"
+          rm -rf /tmp/apk-verify
+          mkdir -p /tmp/apk-verify
+          unzip -q "$APK" 'assets/bin/arm64-v8a/cloudphone-agent' 'assets/bin/arm64-v8a/webrtc-signaling' -d /tmp/apk-verify
+
+          APK_AGENT=/tmp/apk-verify/assets/bin/arm64-v8a/cloudphone-agent
+          APK_SIG=/tmp/apk-verify/assets/bin/arm64-v8a/webrtc-signaling
+          EXPECTED_AGENT=recovered_source/cloudphone-agent/cloudphone-agent-arm64
+          EXPECTED_SIG=recovered_source/webrtc-signaling/webrtc-signaling-linux-arm64
+
+          test "$(sha256sum "$APK_AGENT" | awk '{print $1}')" = "$(sha256sum "$EXPECTED_AGENT" | awk '{print $1}')"
+          test "$(sha256sum "$APK_SIG" | awk '{print $1}')" = "$(sha256sum "$EXPECTED_SIG" | awk '{print $1}')"
+          echo '8a155ae50b06c9f27542461390d08704caa102e01b50ee451cd2d7847092244e  /tmp/apk-verify/assets/bin/arm64-v8a/cloudphone-agent' | sha256sum -c -
+          file "$APK_AGENT" | grep -q 'ARM aarch64'
+          file "$APK_SIG" | grep -q 'ARM aarch64'
+          echo 'APK_BINARY_VERIFICATION=PASS'
 
       - name: Upload Android Artifacts
         uses: actions/upload-artifact@v4
@@ -363,4 +402,3 @@ jobs:
             --title "ScrcpyOverWebRTC ${{ github.ref_name }}" \
             --notes-file RELEASE_NOTES.md \
             release-files/*
-
