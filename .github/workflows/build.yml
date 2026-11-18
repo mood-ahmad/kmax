@@ -1,6 +1,7 @@
 name: Build & Release Pipeline
 
 on:
+  workflow_dispatch:
   push:
     branches: [ master, main ]
     tags: [ 'v*' ]
@@ -363,4 +364,3 @@ jobs:
             --title "ScrcpyOverWebRTC ${{ github.ref_name }}" \
             --notes-file RELEASE_NOTES.md \
             release-files/*
-
