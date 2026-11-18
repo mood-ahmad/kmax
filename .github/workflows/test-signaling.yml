@@ -44,6 +44,46 @@ jobs:
           ! grep -q -- '--- FAIL:' /tmp/agent-auth-matrix.log
           echo 'AUTH_MATRIX=PASS'
 
+      - name: Run Real WSS Agent Authentication Integration Gate (Fail-Closed)
+        run: |
+          set -euo pipefail
+          test -f agent_wss_integration_test.go
+          go test -v -count=1 -timeout 90s -run '^TestAgentWSSIntegration' . | tee /tmp/agent-wss-integration.log
+          grep -q -- '--- PASS: TestAgentWSSIntegrationBearerRegistration' /tmp/agent-wss-integration.log
+          grep -q -- '--- PASS: TestAgentWSSIntegrationWrongBearerRejected' /tmp/agent-wss-integration.log
+          grep -q -- '--- PASS: TestAgentWSSIntegrationMissingCredentialRejected' /tmp/agent-wss-integration.log
+          grep -q -- '--- PASS: TestAgentWSSIntegrationLegacyTokenRegistration' /tmp/agent-wss-integration.log
+          grep -q -- '--- PASS: TestAgentWSSIntegrationBearerPreventsQueryDowngrade' /tmp/agent-wss-integration.log
+          ! grep -q -- '--- FAIL:' /tmp/agent-wss-integration.log
+          echo 'WSS_AUTH_INTEGRATION=PASS'
+
+      - name: Publish Real WSS Integration Summary
+        if: always()
+        working-directory: ${{ github.workspace }}
+        run: |
+          {
+            echo '## Real WSS Agent Authentication Integration'
+            echo
+            if [ -f /tmp/agent-wss-integration.log ]; then
+              if grep -q -- '--- PASS: TestAgentWSSIntegrationBearerRegistration' /tmp/agent-wss-integration.log && \
+                 grep -q -- '--- PASS: TestAgentWSSIntegrationWrongBearerRejected' /tmp/agent-wss-integration.log && \
+                 grep -q -- '--- PASS: TestAgentWSSIntegrationMissingCredentialRejected' /tmp/agent-wss-integration.log && \
+                 grep -q -- '--- PASS: TestAgentWSSIntegrationLegacyTokenRegistration' /tmp/agent-wss-integration.log && \
+                 grep -q -- '--- PASS: TestAgentWSSIntegrationBearerPreventsQueryDowngrade' /tmp/agent-wss-integration.log && \
+                 ! grep -q -- '--- FAIL:' /tmp/agent-wss-integration.log; then
+                echo '**Result: PASS**'
+              else
+                echo '**Result: FAIL**'
+              fi
+              echo
+              echo '```text'
+              grep -E -- '--- (PASS|FAIL): TestAgentWSSIntegration' /tmp/agent-wss-integration.log || true
+              echo '```'
+            else
+              echo '**Result: NOT RUN / FAILED BEFORE TEST OUTPUT**'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run Full Signaling Test Suite
         run: |
           set -euo pipefail
