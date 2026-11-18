@@ -51,12 +51,10 @@ func main() {
 	agentSecret := os.Getenv("AGENT_SECRET")
 	if agentSecret == "" {
 		secretFilePath := filepath.Join(*dataFlag, "agent.secret")
-		// نحاول نقرا السر من الملف لو موجود
 		if fileBytes, err := os.ReadFile(secretFilePath); err == nil {
 			agentSecret = strings.TrimSpace(string(fileBytes))
 		}
 		
-		// لو مفيش سر في الملف، نولد واحد عشوائي آمن ونحفظه
 		if agentSecret == "" {
 			b := make([]byte, 32)
 			if _, err := rand.Read(b); err != nil {
@@ -64,18 +62,15 @@ func main() {
 			}
 			agentSecret = hex.EncodeToString(b)
 			
-			// نضمن إن فولدر البيانات موجود
 			if err := os.MkdirAll(*dataFlag, 0755); err != nil {
 				log.Fatalf("[Security] FATAL: Failed to create data directory: %v", err)
 			}
 			
-			// نحفظ السر عشان المرة الجاية
 			if err := os.WriteFile(secretFilePath, []byte(agentSecret), 0600); err != nil {
 				log.Fatalf("[Security] FATAL: Failed to write agent secret file: %v", err)
 			}
 			log.Printf("[Security] Generated new secure AGENT_SECRET and saved to %s", secretFilePath)
 		}
-		// نخلي السر متاح في الـ Environment للـ Hub والـ API
 		os.Setenv("AGENT_SECRET", agentSecret)
 	}
 
@@ -133,11 +128,13 @@ func main() {
 	go func() {
 		if useTLS {
 			log.Printf("[Server] Starting HTTPS & WSS server on https://%s", addr)
+			log.Printf("Listening on https://%s", addr) // <--- السطر السحري للمحرك
 			if err := server.ListenAndServeTLS(*certFlag, *keyFlag); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("[Server] TLS Listen error: %v", err)
 			}
 		} else {
 			log.Printf("[Server] Starting HTTP & WS server on http://%s", addr)
+			log.Printf("Listening on http://%s", addr) // <--- السطر السحري للمحرك
 			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				log.Fatalf("[Server] Listen error: %v", err)
 			}
