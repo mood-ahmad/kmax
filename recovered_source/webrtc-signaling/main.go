@@ -2,10 +2,12 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -47,7 +49,7 @@ func main() {
 	log.Printf("   ScrcpyOverWebRTC Signaling Server v0.3.6 (Recovered)")
 	log.Printf("====================================================")
 
-	// إدارة السر أوتوماتيك (حل دائم)
+	// إدارة السر أوتوماتيك
 	agentSecret := os.Getenv("AGENT_SECRET")
 	if agentSecret == "" {
 		secretFilePath := filepath.Join(*dataFlag, "agent.secret")
@@ -112,31 +114,54 @@ func main() {
 
 	addr := fmt.Sprintf("%s:%s", *hostFlag, *portFlag)
 	useTLS := false
+	var tlsConfig *tls.Config
+
+	// 1. التحقق من الشهادات قبل التشغيل
 	if *tlsFlag {
 		if _, errCert := os.Stat(*certFlag); errCert == nil {
 			if _, errKey := os.Stat(*keyFlag); errKey == nil {
+				cert, err := tls.LoadX509KeyPair(*certFlag, *keyFlag)
+				if err != nil {
+					log.Fatalf("[Server] FATAL: Failed to load TLS certs: %v", err)
+				}
+				tlsConfig = &tls.Config{
+					Certificates: []tls.Certificate{cert},
+				}
 				useTLS = true
 			}
 		}
 	}
 
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+	// 2. محاولة فتح البورت (لو البورت مشغول، السيرفر هيقف هنا)
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		log.Fatalf("[Server] FATAL: Failed to bind to port %s: %v", addr, err)
 	}
 
+	server := &http.Server{
+		Addr:      addr,
+		Handler:   mux,
+		TLSConfig: tlsConfig,
+	}
+
+	// 3. طباعة "Listening on" بعد التأكد من أن البورت اتفتح والشهادات سليمة
+	if useTLS {
+		log.Printf("[Server] Starting HTTPS & WSS server on https://%s", addr)
+		log.Printf("Listening on https://%s", addr) // هنا الكلمة حقيقية 100%
+	} else {
+		log.Printf("[Server] Starting HTTP & WS server on http://%s", addr)
+		log.Printf("Listening on http://%s", addr) // هنا الكلمة حقيقية 100%
+	}
+
+	// 4. بدء السيرفر فعليًا
 	go func() {
 		if useTLS {
-			log.Printf("[Server] Starting HTTPS & WSS server on https://%s", addr)
-			log.Printf("Listening on https://%s", addr) // <--- السطر السحري للمحرك
-			if err := server.ListenAndServeTLS(*certFlag, *keyFlag); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("[Server] TLS Listen error: %v", err)
+			if err := server.Serve(tls.NewListener(ln, tlsConfig)); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("[Server] TLS Serve error: %v", err)
 			}
 		} else {
-			log.Printf("[Server] Starting HTTP & WS server on http://%s", addr)
-			log.Printf("Listening on http://%s", addr) // <--- السطر السحري للمحرك
-			if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("[Server] Listen error: %v", err)
+			if err := server.Serve(ln); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("[Server] Serve error: %v", err)
 			}
 		}
 	}()
