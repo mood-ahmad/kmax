@@ -46,6 +46,68 @@ jobs:
           file webrtc-signaling-test
           ls -lh webrtc-signaling-test
 
+      # ==========================================
+      # NEW: Real Server Verification Step
+      # ==========================================
+      - name: Verify Server Starts and Responds to HTTPS
+        run: |
+          echo "=== Generating temporary TLS certificates ==="
+          mkdir -p /tmp/test-certs
+          openssl req -x509 -newkey rsa:4096 -keyout /tmp/test-certs/server.key -out /tmp/test-certs/server.crt -days 1 -nodes -subj "/CN=localhost" 2>/dev/null
+
+          echo "=== Starting the server in the background ==="
+          # We use DEV_MODE=true to bypass the secret requirement for this test
+          export DEV_MODE=true
+          export DATA_DIR=/tmp/test-data
+          mkdir -p $DATA_DIR
+
+          ./webrtc-signaling-test -port 9443 -cert /tmp/test-certs/server.crt -key /tmp/test-certs/server.key -data $DATA_DIR > /tmp/test-server.log 2>&1 &
+          SERVER_PID=$!
+
+          echo "=== Waiting for server to become ready ==="
+          READY=0
+          for i in $(seq 1 20); do
+            if grep -q "Listening on" /tmp/test-server.log; then
+              READY=1
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$READY" -ne 1 ]; then
+            echo "❌ FAILED: Server did not print 'Listening on' within 20 seconds."
+            echo "--- Server Log ---"
+            cat /tmp/test-server.log
+            kill -9 $SERVER_PID || true
+            exit 1
+          fi
+          echo "✅ Server printed 'Listening on'."
+
+          echo "=== Verifying server responds to HTTPS requests ==="
+          # -k ignores self-signed cert, -s silent, -o /dev/null discard body, -w "%{http_code}" print status
+          HTTP_STATUS=$(curl -k -s -o /dev/null -w "%{http_code}" https://127.0.0.1:9443/)
+          
+          echo "Server returned HTTP Status: $HTTP_STATUS"
+
+          if [ "$HTTP_STATUS" -eq 200 ] || [ "$HTTP_STATUS" -eq 401 ] || [ "$HTTP_STATUS" -eq 404 ]; then
+            echo "✅ SUCCESS: Server is up and responding to HTTP requests."
+          else
+            echo "❌ FAILED: Server did not return a valid HTTP response."
+            echo "--- Server Log ---"
+            cat /tmp/test-server.log
+            kill -9 $SERVER_PID || true
+            exit 1
+          fi
+
+          echo "=== Stopping the test server ==="
+          kill -15 $SERVER_PID || true
+          sleep 1
+          # Force kill if still running
+          kill -9 $SERVER_PID || true
+          
+          echo "=== Verification Complete ==="
+      # ==========================================
+
       - name: Upload Linux test binary
         uses: actions/upload-artifact@v4
         with:
