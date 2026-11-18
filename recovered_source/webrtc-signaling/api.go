@@ -588,13 +588,35 @@ func (s *APIServer) handleRegisterAgent(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if agentSecret != "" {
-			token := r.URL.Query().Get("token")
-			if token == "" {
-				token = r.URL.Query().Get("secret")
+			// CloudPhone Agent v0.4.1 sends the device secret as:
+			// Authorization: Bearer <secret>.
+			// Keep legacy query credentials for older agents, but never
+			// let a malformed/incorrect Authorization header fall back to
+			// a query credential.
+			authHeader := strings.TrimSpace(r.Header.Get("Authorization"))
+			token := ""
+
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				token = strings.TrimSpace(strings.TrimPrefix(authHeader, "Bearer "))
 			}
+
+			if authHeader == "" {
+				token = r.URL.Query().Get("token")
+				if token == "" {
+					token = r.URL.Query().Get("secret")
+				}
+			}
+
 			if token != agentSecret {
 				log.Printf("[Agent] Unauthorized registration attempt for device: %s", deviceID)
-				_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "Unauthorized agent secret"), time.Now().Add(time.Second))
+				_ = conn.WriteControl(
+					websocket.CloseMessage,
+					websocket.FormatCloseMessage(
+						websocket.ClosePolicyViolation,
+						"Unauthorized agent secret",
+					),
+					time.Now().Add(time.Second),
+				)
 				conn.Close()
 				return
 			}
