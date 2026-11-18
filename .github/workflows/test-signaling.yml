@@ -218,6 +218,7 @@ jobs:
           trap cleanup_runtime EXIT
 
           ./webrtc-signaling-test \
+            -tls=false \
             -host 127.0.0.1 \
             -port 9443 \
             -assets /tmp/v041-runtime-test/assets \
